@@ -1,4 +1,4 @@
-// STATUS: START OF LAB 6
+// STATUS: END OF LAB 6
 
 #define _CRT_SECURE_NO_WARNINGS 1
 
@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include <vector>
+#include <cstdlib>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -223,6 +224,26 @@ public:
         //      For all other sites Pj (optionally, only k nearest neighbors) :
         //          Clip it with bisector of [Pi,Pj]
         //      (Lab 3, fluids) : also clip it by a disk of radius sqrt(w_i - w_air) centered at Pi
+
+        cells.clear();
+
+        for (int i = 0; i < points.size(); i++) {
+            Polygon cell;
+
+            cell.vertices.push_back(Vector(0, 0));
+            cell.vertices.push_back(Vector(1, 0));
+            cell.vertices.push_back(Vector(1, 1));
+            cell.vertices.push_back(Vector(0, 1));
+
+            for (int j = 0; j < points.size(); j++) {
+                if (i == j) {
+                    continue;
+                }
+                cell = clip_by_bisector(cell, points[i], points[j], 0, 0);
+            }
+
+            cells.push_back(cell);
+        }
     }
 
 
@@ -245,6 +266,31 @@ public:
         // TODO Lab 2 (Semi-Discrete Optimal Transport) : extend to Laguerre cells, i.e., w0 != w1
 
         Polygon result;
+
+        Vector M = (P0 + Pi) / 2;
+        Vector normal = Pi - P0;
+
+        for (int i = 0; i < V.vertices.size(); i++) {
+            Vector A = V.vertices[i];
+            Vector B = V.vertices[(i + 1) % V.vertices.size()];
+
+            bool A_inside = (A - P0).norm2() <= (A - Pi).norm2();
+            bool B_inside = (B - P0).norm2() <= (B - Pi).norm2();
+
+            double t = dot(M - A, normal) / dot(B - A, normal);
+            
+            Vector P = A + (B - A) * t;
+            
+            if (B_inside) {
+                if (!A_inside) {
+                    result.vertices.push_back(P);
+                }
+                result.vertices.push_back(B);
+            }
+            else if (A_inside) {
+                result.vertices.push_back(P);
+            }
+        }
 
         return result;
     }
@@ -375,6 +421,7 @@ public:
 
 int main() {
 
+    /*
     Polygon p;
     p.vertices.push_back(Vector(0.1, 0.2));
     p.vertices.push_back(Vector(0.6, 0.4));
@@ -386,5 +433,25 @@ int main() {
 
     save_frame(s, "toto");
     save_svg(s, "toto.svg");
+    */
+
+    VoronoiDiagram vor;
+    int N = 50;
+
+    for (int i = 0; i < N; i++) {
+        double x = (double)rand() / RAND_MAX;
+        double y = (double)rand() / RAND_MAX;
+
+        vor.points.push_back(Vector(x, y));
+        vor.weights.push_back(0);
+    }
+
+    vor.compute();
+
+    save_frame(vor.cells, "voronoi");
+    save_svg(vor.cells, "voronoi.svg", &vor.points);
+
     return 0;
 }
+
+// Compiled using: g++ -O3 -std=c++11 -fopenmp -I. main.cpp lbfgs.c -o main
