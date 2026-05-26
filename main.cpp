@@ -1,4 +1,4 @@
-// STATUS: START OF LAB 7
+// STATUS: END OF LAB 7
 
 #define _CRT_SECURE_NO_WARNINGS 1
 
@@ -62,9 +62,19 @@ public:
 
     double area() {
         if (vertices.size() < 3) return 0;
-        // TODO Lab 3
+        // TODO Lab 2
         // Compute the area of the polygon
-        return -111;
+        
+        double total_sum = 0.0;
+        int num_v = vertices.size();
+        
+        for (int i = 0; i < num_v; i++) {
+            int next_idx = (i+1) % num_v;
+            total_sum += (vertices[i][0]*vertices[next_idx][1] - vertices[next_idx][0]*vertices[i][1]);
+        }
+        
+        if (total_sum < 0) total_sum = -total_sum;
+        return 0.5 * total_sum;
     }
 
     Vector centroid() {
@@ -78,10 +88,32 @@ public:
     double integral_square_distance(const Vector& Pi) {
         if (vertices.size() < 3) return 0;
 
-        // TODO Lab 3
+        // TODO Lab 2
         // Compute the integral of ||x-Pi||^2 over the polygon
+    
+        double result_integral = 0.0;
+        int num_v = vertices.size();
+        
+        for (int k = 1; k < num_v-1; k++) {
+            Vector c1 = vertices[0];
+            Vector c2 = vertices[k];
+            Vector c3 = vertices[k+1];
+            
+            Vector d1 = c1 - Pi;
+            Vector d2 = c2 - Pi;
+            Vector d3 = c3 - Pi;
+            
+            double local_sum = dot(d1, d1) + dot(d2, d2) + dot(d3, d3) + dot(d1, d2) + dot(d2, d3) + dot(d3, d1);
+                               
+            double tri_area = 0.5 * ((c2[0]-c1[0]) * (c3[1]-c1[1]) - (c2[1]-c1[1]) * (c3[0]-c1[0]));
+            if (tri_area < 0) {
+                tri_area = -tri_area;
+            }
+            
+            result_integral += (tri_area/6.0) * local_sum;
+        }
 
-        return -111;
+        return result_integral;
     }
 
     std::vector<Vector> vertices;
@@ -239,7 +271,14 @@ public:
                 if (i == j) {
                     continue;
                 }
+
+                // Line modified during lab 2
+
+                /*
                 cell = clip_by_bisector(cell, points[i], points[j], 0, 0);
+                */
+
+                cell = clip_by_bisector(cell, points[i], points[j], weights[i], weights[j]);
             }
 
             cells.push_back(cell);
@@ -267,19 +306,31 @@ public:
 
         Polygon result;
 
-        Vector M = (P0 + Pi) / 2;
+        int num_v = V.vertices.size();
+        if (num_v == 0) {
+            return result;
+        }
+
         Vector normal = Pi - P0;
+        double dist2 = normal.norm2();
+        
+        Vector M = 0.5 * (P0+Pi) + ((w0-wi) / (2.0*dist2)) * (Pi-P0);
 
-        for (int i = 0; i < V.vertices.size(); i++) {
+
+        for (int i = 0; i < num_v; i++) {
             Vector A = V.vertices[i];
-            Vector B = V.vertices[(i + 1) % V.vertices.size()];
+            Vector B = V.vertices[(i+1) % num_v];
 
-            bool A_inside = (A - P0).norm2() <= (A - Pi).norm2();
-            bool B_inside = (B - P0).norm2() <= (B - Pi).norm2();
+            bool A_inside = ((A-P0).norm2() - w0 <= (A-Pi).norm2() - wi);
+            bool B_inside = ((B-P0).norm2() - w0 <= (B-Pi).norm2() - wi);
 
-            double t = dot(M - A, normal) / dot(B - A, normal);
+            double denom = dot(B-A, normal);
+            double t = 0.0;
+            if (abs(denom) > 1e-11) {
+                t = dot(M-A, normal) / denom;
+            }
             
-            Vector P = A + (B - A) * t;
+            Vector P = A + t * (B-A);
             
             if (B_inside) {
                 if (!A_inside) {
@@ -334,11 +385,25 @@ static lbfgsfloatval_t evaluate(
   
    
     // Lab 2 (Optimal transport) : compute the function to be minimized (fx) and its gradient (g[i], i=0..n-1)
-    // Lab 3 (fluid) : adapt these functions to support partial optimal transport (now "n" has been increased by 1 to account for the air variable)
     
+    for (int i = 0; i < n; i++) {
+        ot->vor.weights[i] = x[i];
+    }
+    ot->vor.compute();
+
+    // Lab 3 (fluid) : adapt these functions to support partial optimal transport (now "n" has been increased by 1 to account for the air variable)
+
     lbfgsfloatval_t fx = 0.0;
-    // g[i] = ...
-    // fx = ...
+
+    double target_mass = 1.0 / n;
+    
+    for (int i = 0; i < n; i++) {
+        double current_area = ot->vor.cells[i].area();
+        double current_dist_integral = ot->vor.cells[i].integral_square_distance(ot->vor.points[i]);
+        
+        g[i] = -(target_mass - current_area);
+        fx += -(current_dist_integral - x[i]*current_area + target_mass*x[i]);
+    }
 
     return fx;
 }
@@ -436,7 +501,7 @@ int main() {
     */
 
     VoronoiDiagram vor;
-    int N = 50;
+    int N = 100;
 
     for (int i = 0; i < N; i++) {
         double x = (double)rand() / RAND_MAX;
@@ -446,10 +511,16 @@ int main() {
         vor.weights.push_back(0);
     }
 
-    vor.compute();
+    OptimalTransport ot;
+    ot.vor = vor;
 
-    save_frame(vor.cells, "voronoi");
-    save_svg(vor.cells, "voronoi.svg", &vor.points);
+    ot.vor.compute();
+    save_frame(ot.vor.cells, "voronoi");
+    save_svg(ot.vor.cells, "voronoi.svg", &ot.vor.points);
+
+    ot.optimize();
+    save_frame(ot.vor.cells, "ot_result");
+    save_svg(ot.vor.cells, "ot_result.svg", &ot.vor.points);
 
     return 0;
 }
