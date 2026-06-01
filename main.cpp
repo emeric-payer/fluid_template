@@ -1,4 +1,4 @@
-// STATUS: START OF LAB 8 (MAKEUP SESSION)
+// STATUS: END OF LAB 8 (MAKEUP SESSION)
 
 #define _CRT_SECURE_NO_WARNINGS 1
 
@@ -14,6 +14,10 @@
 #include "lbfgs.h"
 
 double sqr(double x) { return x * x; };
+
+// Implemented in lab 3
+double target_fluid_area = 0.4;
+const double PI = 3.141592653589793;
 
 class Vector {
 public:
@@ -82,7 +86,27 @@ public:
         // TODO Lab 3
         // Compute the centroid of the polygon
 
-        return Vector(-111,-111);
+        int num_v = vertices.size();
+        double area_acc = 0.0;
+        Vector c_accum(0, 0);
+
+        for (int k = 1; k < num_v - 1; k++) {
+            Vector c1 = vertices[0];
+            Vector c2 = vertices[k];
+            Vector c3 = vertices[k+1];
+
+            double tri_area = 0.5 * ((c2[0]-c1[0])*(c3[1]-c1[1]) - (c2[1]-c1[1])*(c3[0]-c1[0]));
+
+            Vector tri_mid = (c1+c2+c3) / 3.0;
+            c_accum = c_accum + tri_area*tri_mid;
+            area_acc += tri_area;
+        }
+
+        if (area_acc < 1e-12 && area_acc > -1e-12) {
+            return vertices[0];
+        }
+
+        return c_accum / area_acc;
     }
 
     double integral_square_distance(const Vector& Pi) {
@@ -281,6 +305,33 @@ public:
                 cell = clip_by_bisector(cell, points[i], points[j], weights[i], weights[j]);
             }
 
+            // Implemented during lab 3
+
+            if (weights.size() > points.size()) {
+                double w_air = weights[points.size()];
+                double radius2 = weights[i] - w_air;
+
+                if (radius2 <= 0) {
+                    cell.vertices.clear();
+                } else {
+                    double radius = sqrt(radius2);
+                    int disk_sides = 60;
+
+                    for (int s = 0; s < disk_sides; s++) {
+                        double a1 = 2.0 * PI * s / disk_sides;
+                        double a2 = 2.0 * PI * (s + 1) / disk_sides;
+
+                        Vector u(points[i][0] + radius*cos(a1), points[i][1] + radius*sin(a1));
+                        Vector v(points[i][0] + radius*cos(a2), points[i][1] + radius*sin(a2));
+                        cell = clip_by_edge(cell, u, v);
+
+                        if (cell.vertices.empty()) {
+                            break;
+                        }
+                    }
+                }
+            }
+
             cells.push_back(cell);
         }
     }
@@ -293,6 +344,42 @@ public:
         // Will be used to clip a polygon (a cell) by all the edges of a (discretized) disk
 
         Polygon result;
+
+        int num_v = V.vertices.size();
+
+        if (num_v == 0) {
+            return result;
+        }
+
+        Vector edge = v - u;
+
+        for (int i = 0; i < num_v; i++) {
+            Vector A = V.vertices[i];
+            Vector B = V.vertices[(i+1) % num_v];
+
+            double side_a = edge[0]*(A[1]-u[1]) - edge[1]*(A[0]-u[0]);
+            double side_b = edge[0]*(B[1]-u[1]) - edge[1]*(B[0]-u[0]);
+
+            bool A_inside = (side_a >= 0);
+            bool B_inside = (side_b >= 0);
+
+            double t = 0.0;
+
+            if (side_a != side_b) {
+                t = side_a / (side_a-side_b);
+            }
+
+            Vector P = A + t * (B - A);
+
+            if (B_inside) {
+                if (!A_inside) {
+                    result.vertices.push_back(P);
+                }
+                result.vertices.push_back(B);
+            } else if (A_inside) {
+                result.vertices.push_back(P);
+            }
+        }
 
         return result;
     }
@@ -386,15 +473,16 @@ static lbfgsfloatval_t evaluate(
    
     // Lab 2 (Optimal transport) : compute the function to be minimized (fx) and its gradient (g[i], i=0..n-1)
     
+    // Commented this code during lab 3
+
+    /*
     for (int i = 0; i < n; i++) {
         ot->vor.weights[i] = x[i];
     }
     ot->vor.compute();
 
     // Lab 3 (fluid) : adapt these functions to support partial optimal transport (now "n" has been increased by 1 to account for the air variable)
-
-    lbfgsfloatval_t fx = 0.0;
-
+    
     double target_mass = 1.0 / n;
     
     for (int i = 0; i < n; i++) {
@@ -403,6 +491,34 @@ static lbfgsfloatval_t evaluate(
         
         g[i] = -(target_mass - current_area);
         fx += -(current_dist_integral - x[i]*current_area + target_mass*x[i]);
+    }
+    */
+
+    lbfgsfloatval_t fx = 0.0;
+
+    int num_fluid = ot->vor.points.size();
+    bool has_air = (n > num_fluid);
+    double lam;
+
+    if (has_air) {
+        lam = target_fluid_area / num_fluid;
+    } else {
+        lam = 1.0 / n;
+    }
+
+    double sum_area = 0.0;
+
+    for (int i = 0; i < num_fluid; i++) {
+        double cell_area = ot->vor.cells[i].area();
+        double dist_int  = ot->vor.cells[i].integral_square_distance(ot->vor.points[i]);
+        g[i] = cell_area - lam;
+        fx  += -(dist_int - x[i]*cell_area + lam*x[i]);
+        sum_area += cell_area;
+    }
+
+    if (has_air) {
+        g[num_fluid] = target_fluid_area - sum_area;
+        fx += -(x[num_fluid] * (sum_area-target_fluid_area));
     }
 
     return fx;
@@ -446,6 +562,31 @@ void OptimalTransport::optimize() {
 class Fluid {
 public:
     Fluid(int N_particles = 1000) : N_particles(N_particles) {
+        // Implemented during lab 3
+
+        fluid_volume = 0.2;
+        target_fluid_area = fluid_volume;
+        particles.resize(N_particles);
+        velocities.resize(N_particles, Vector(0, 0));
+
+        Vector blob_c(0.5, 0.7);
+        double blob_r = sqrt(fluid_volume / PI);
+        int placed = 0;
+
+        while (placed < N_particles) {
+            double rx = (double)rand() / RAND_MAX;
+            double ry = (double)rand() / RAND_MAX;
+            Vector cand(blob_c[0] - blob_r + 2*blob_r*rx,
+                        blob_c[1] - blob_r + 2*blob_r*ry);
+            if ((cand - blob_c).norm2() <= blob_r*blob_r) {
+                particles[placed] = cand;
+                placed ++;
+            }
+        }
+
+        ot.vor.points = particles;
+        ot.vor.weights.resize(N_particles + 1, fluid_volume / (N_particles * PI));
+        ot.vor.weights[N_particles] = 0.0;
     }
 
     // Lab 3 : advance the simulation dt in time
@@ -458,14 +599,60 @@ public:
         // TODO Lab 3 : 
         // Compute semi-discrete partial optimal transport
         // for all particles, add gravity and spring force towards cell centroid, integrate acceleration->velocity and velocity->position
+
+        ot.vor.points = particles;
+        target_fluid_area = fluid_volume;
+        ot.optimize();
+
+        for (int i = 0; i < N_particles; i++) {
+            Vector force = m_i * g;
+
+            if (ot.vor.cells[i].vertices.size() >= 3) {
+                Vector ctr = ot.vor.cells[i].centroid();
+                force = force + (1.0 / epsilon2) * (ctr - particles[i]);
+            }
+
+            velocities[i] = velocities[i] + (dt/m_i) * force;
+            particles[i]  = particles[i] + dt * velocities[i];
+
+            if (particles[i][0] < 0) {
+                particles[i][0] = 0;
+                velocities[i][0] *= -0.5;
+            }
+            if (particles[i][0] > 1) {
+                particles[i][0] = 1;
+                velocities[i][0] *= -0.5;
+            }
+            
+            if (particles[i][1] < 0) {
+                particles[i][1] = 0;
+                velocities[i][1] = 0;
+            }
+            if (particles[i][1] > 1) {
+                particles[i][1] = 1;
+                velocities[i][1] = 0;
+            }
+        }
     }
 
     // just run the full simulation
     void run_simulation() {
+        system("mkdir -p frames");
         double dt = 0.002;
+        
+        for (int relax = 0; relax < 5; relax++) {
+            ot.vor.points = particles;
+            target_fluid_area = fluid_volume;
+            ot.optimize();
+            for (int i = 0; i < N_particles; i++) {
+                if (ot.vor.cells[i].vertices.size() >= 3) {
+                    particles[i] = ot.vor.cells[i].centroid();
+                }
+            }
+        }
         for (int i = 0; i < 1000; i++) {
             time_step(dt);
-            save_frame(ot.vor.cells, "test", i);
+            save_frame(ot.vor.cells, "frames/test", i);
         }
     }
 
@@ -500,6 +687,9 @@ int main() {
     save_svg(s, "toto.svg");
     */
 
+    // Commented this code during lab 3
+
+    /*
     VoronoiDiagram vor;
     int N = 100;
 
@@ -521,8 +711,13 @@ int main() {
     ot.optimize();
     save_frame(ot.vor.cells, "ot_result");
     save_svg(ot.vor.cells, "ot_result.svg", &ot.vor.points);
+    */
 
+    Fluid sim(300);
+    sim.run_simulation();
     return 0;
 }
 
 // Compiled using: g++ -O3 -std=c++11 -fopenmp -I. main.cpp lbfgs.c -o main
+
+// Video generated using: ffmpeg -framerate 24 -i frames/test%d.png -c:v libx264 -pix_fmt yuv420p output.mp4
